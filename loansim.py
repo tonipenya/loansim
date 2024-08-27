@@ -1,7 +1,7 @@
-from collections.abc import Iterable
+from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Tuple
+from typing import Sequence, Tuple, overload
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -37,27 +37,56 @@ class Payment:
         return Payment(self.date, self.amount + value)
 
 
-class PaymentSchema(Iterable):
-    def for_date(self, date: date) -> Payment:
-        raise NotImplementedError
+class PaymentSchema(Sequence[Payment]):
+    @overload
+    def __getitem__(self, index: int) -> Payment: ...
+
+    @overload
+    def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
+
+    @overload
+    def __getitem__(self, date: date) -> Payment: ...
+
+    @abstractmethod
+    def __getitem__(self, value): ...
 
 
 class PastOverpayments(PaymentSchema):
     def __init__(self, past_overpayments_path: str) -> None:
         self.overpayments: dict[date, Payment] = {
             payment["date"].date(): Payment(payment["date"].date(), payment["amount"])
-            for payment in pd.read_csv(
-                past_overpayments_path, parse_dates=["date"]
-            ).to_dict("records")
+            for payment in pd.read_csv(past_overpayments_path, parse_dates=["date"])
+            .sort_values(by="date")
+            .to_dict("records")
         }
 
-    def for_date(self, date: date) -> Payment:
-        if date not in self.overpayments:
-            return Payment(date, 0.0)
-        return self.overpayments[date]
+    @overload
+    def __getitem__(self, index: int) -> Payment: ...
+
+    @overload
+    def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
+
+    @overload
+    def __getitem__(self, date: date) -> Payment: ...
+
+    def __getitem__(self, index):
+        match index:
+            case int():
+                return list(self.overpayments.values())[index]
+            case date():
+                return (
+                    self.overpayments[index]
+                    if index in self.overpayments
+                    else Payment(index, 0)
+                )
+            case _:
+                IndexError
 
     def __iter__(self):
         return sorted(self.overpayments.values()).__iter__()
+
+    def __len__(self):
+        return len(self.overpayments)
 
 
 @dataclass
@@ -66,21 +95,45 @@ class PaymentsInRange(PaymentSchema):
     end_date: date | None
     amount: float
 
-    def for_date(self, date: date) -> Payment:
-        if (
-            (self.start_date and date < self.start_date)
-            or (self.end_date and date > self.end_date)
-            or date.day != 1
-        ):
-            return Payment(date, 0.0)
+    @overload
+    def __getitem__(self, index: int) -> Payment: ...
 
-        return Payment(date, self.amount)
+    @overload
+    def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
+
+    @overload
+    def __getitem__(self, date: date) -> Payment: ...
+
+    def __getitem__(self, index):
+        match index:
+            case int():
+                if self.end_date is not None and index > months_diff(
+                    self.start_date, self.end_date
+                ):
+                    raise IndexError("list index out of range")
+                return Payment(
+                    self.start_date + relativedelta(months=index), self.amount
+                )
+            case date():
+                if (
+                    (self.start_date and index < self.start_date)
+                    or (self.end_date and index > self.end_date)
+                    or index.day != 1
+                ):
+                    return Payment(index, 0.0)
+
+                return Payment(index, self.amount)
+            case _:
+                IndexError
 
     def __iter__(self):
         return (
             Payment(self.start_date + relativedelta(months=month_count), self.amount)
             for month_count in range(months_diff(self.start_date, self.end_date) + 1)
         )
+
+    def __len__(self):
+        return months_diff(self.start_date, self.end_date) + 1
 
 
 def kde(payments: PaymentSchema) -> pd.Series:
@@ -154,9 +207,9 @@ def simulate(
     payment_date = first_date
 
     while outstanding > 0 and (last_date is None or payment_date < last_date):
-        payment = sum(
-            schema.for_date(payment_date) for schema in payment_schemas
-        ) or Payment(None)
+        payment = sum(schema[payment_date] for schema in payment_schemas) or Payment(
+            None
+        )
         interest_payed = outstanding * interest_rate / 12
         outstanding_payed = payment.amount - interest_payed
         outstanding = outstanding - outstanding_payed
