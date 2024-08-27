@@ -10,7 +10,7 @@ from scipy.stats import gaussian_kde
 
 @dataclass
 class Amortization:
-    date: date
+    date_: date
     amount: float
     interest_payed: float
     outstanding_payed: float
@@ -19,7 +19,7 @@ class Amortization:
 
 @dataclass(order=True)
 class Payment:
-    date: (
+    date_: (
         date | None
     )  # keep date as first field (field order determines results of comparisons for sorting)
     amount: float = 0
@@ -29,12 +29,13 @@ class Payment:
             raise TypeError("Must be same class")
 
         return Payment(
-            self.date if self.date == other.date else None, self.amount + other.amount
+            self.date_ if self.date_ == other.date_ else None,
+            self.amount + other.amount,
         )
 
     def __radd__(self, value: int) -> "Payment":
         # To enable using sum([Payment, Payment]) https://stackoverflow.com/a/1218735
-        return Payment(self.date, self.amount + value)
+        return Payment(self.date_, self.amount + value)
 
 
 class PaymentSchema(Sequence[Payment]):
@@ -45,7 +46,7 @@ class PaymentSchema(Sequence[Payment]):
     def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
 
     @overload
-    def __getitem__(self, date: date) -> Payment: ...
+    def __getitem__(self, date_: date) -> Payment: ...
 
     @abstractmethod
     def __getitem__(self, value): ...
@@ -67,7 +68,7 @@ class PastOverpayments(PaymentSchema):
     def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
 
     @overload
-    def __getitem__(self, date: date) -> Payment: ...
+    def __getitem__(self, date_: date) -> Payment: ...
 
     def __getitem__(self, index):
         match index:
@@ -102,7 +103,7 @@ class PaymentsInRange(PaymentSchema):
     def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
 
     @overload
-    def __getitem__(self, date: date) -> Payment: ...
+    def __getitem__(self, date_: date) -> Payment: ...
 
     def __getitem__(self, index):
         match index:
@@ -137,7 +138,12 @@ class PaymentsInRange(PaymentSchema):
 
 
 def kde(payments: PaymentSchema) -> pd.Series:
-    values = pd.DataFrame(payments).set_index("date").amount
+    values = (
+        pd.DataFrame(payments)
+        .rename(columns={"date_": "date"})
+        .set_index("date")
+        .amount
+    )
     values = values[values != 0]
     min_index = int(values.min())
     max_index = int(values.max())
@@ -173,7 +179,7 @@ def outstanding(
 
 
 def payments_per_year(payments: PaymentSchema) -> pd.Series:
-    yearly_overpayment = pd.DataFrame(payments)
+    yearly_overpayment = pd.DataFrame(payments).rename(columns={"date_": "date"})
     yearly_overpayment["date"] = pd.to_datetime(yearly_overpayment.date)
     return yearly_overpayment.groupby(yearly_overpayment.date.dt.year).amount.sum()
 
@@ -184,17 +190,21 @@ def payment_table(
     outstanding: float,
     payments: list[PaymentSchema],
 ) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            simulation
-            for simulation in simulate(
-                first_date=first_date,
-                interest_rate=interest_rate,
-                outstanding=outstanding,
-                payment_schemas=payments,
-            )
-        ]
-    ).set_index("date")
+    return (
+        pd.DataFrame(
+            [
+                simulation
+                for simulation in simulate(
+                    first_date=first_date,
+                    interest_rate=interest_rate,
+                    outstanding=outstanding,
+                    payment_schemas=payments,
+                )
+            ]
+        )
+        .rename(columns={"date_": "date"})
+        .set_index("date")
+    )
 
 
 def simulate(
@@ -215,7 +225,7 @@ def simulate(
         outstanding = outstanding - outstanding_payed
 
         yield Amortization(
-            date=payment_date,
+            date_=payment_date,
             amount=payment.amount,
             interest_payed=interest_payed,
             outstanding_payed=outstanding_payed,
@@ -228,11 +238,12 @@ def simulate(
 def stats(payments: PaymentSchema) -> Tuple[float, float, float, float]:
     s = (
         pd.DataFrame(payments)
+        .rename(columns={"date_": "date"})
         .set_index("date")
         .reindex(
             pd.date_range(
-                min(payments).date,
-                max(payments).date,
+                min(payments).date_,
+                max(payments).date_,
                 freq="MS",
                 inclusive="both",
             ).date,

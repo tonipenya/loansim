@@ -117,7 +117,7 @@ with col1:
 
 with col2:
     st.subheader("Overpayments made")
-    st.bar_chart(past_overpayments, x="date", y="amount")
+    st.bar_chart(past_overpayments, x="date_", y="amount")
 
 with col3:
     st.subheader("Overpayment distribution")
