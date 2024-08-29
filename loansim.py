@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import date, timedelta
+from itertools import chain
 from typing import Sequence, Tuple, overload
 
 import pandas as pd
@@ -137,6 +138,46 @@ class PaymentsInRange(PaymentSchema):
         return months_diff(self.start_date, self.end_date) + 1
 
 
+@dataclass
+class CompositePayments(PaymentSchema):
+    payment_schemas: list[PaymentSchema]
+
+    @overload
+    def __getitem__(self, index: int) -> Payment: ...
+
+    @overload
+    def __getitem__(self, slice: slice) -> Sequence[Payment]: ...
+
+    @overload
+    def __getitem__(self, date_: date) -> Payment: ...
+
+    def __getitem__(self, index):
+        match index:
+            case int():
+                if index >= sum(len(schema) for schema in self.payment_schemas):
+                    raise IndexError("list index out of range")
+
+                index_in_schema = index
+                for schema in self.payment_schemas:
+                    payment_count_in_schema = len(schema)
+
+                    if payment_count_in_schema > index_in_schema:
+                        return schema[index_in_schema]
+                    else:
+                        index_in_schema -= payment_count_in_schema
+
+            case date():
+                return sum(schema[index] for schema in self.payment_schemas)
+            case _:
+                IndexError
+
+    def __iter__(self):
+        return chain.from_iterable(self.payment_schemas)
+
+    def __len__(self):
+        return sum(len(schema) for schema in self.payment_schemas)
+
+
 def kde(payments: PaymentSchema) -> pd.Series:
     values = (
         pd.DataFrame(payments)
@@ -164,7 +205,7 @@ def outstanding(
     outstanding_date: date,
     interest_rate: float,
     mortgage_amount: float,
-    payment_schemas: list[PaymentSchema],
+    payments: PaymentSchema,
 ) -> float:
     # `*_, x = Xs` gets the assigns the last value of iterator `Xs` to `x``
     *_, last_amortization_data = simulate(
@@ -172,7 +213,7 @@ def outstanding(
         last_date=outstanding_date,
         interest_rate=interest_rate,
         outstanding=mortgage_amount,
-        payment_schemas=payment_schemas,
+        payments=payments,
     )
 
     return last_amortization_data.outstanding
@@ -188,7 +229,7 @@ def payment_table(
     first_date: date,
     interest_rate: float,
     outstanding: float,
-    payments: list[PaymentSchema],
+    payments: PaymentSchema,
 ) -> pd.DataFrame:
     return (
         pd.DataFrame(
@@ -198,7 +239,7 @@ def payment_table(
                     first_date=first_date,
                     interest_rate=interest_rate,
                     outstanding=outstanding,
-                    payment_schemas=payments,
+                    payments=payments,
                 )
             ]
         )
@@ -212,14 +253,12 @@ def simulate(
     interest_rate: float,
     outstanding: float,
     last_date: date | None = None,
-    payment_schemas: list[PaymentSchema] = [],
+    payments: PaymentSchema = CompositePayments([]),
 ):
     payment_date = first_date
 
     while outstanding > 0 and (last_date is None or payment_date < last_date):
-        payment = sum(schema[payment_date] for schema in payment_schemas) or Payment(
-            None
-        )
+        payment = payments[payment_date]
         interest_payed = outstanding * interest_rate / 12
         outstanding_payed = payment.amount - interest_payed
         outstanding = outstanding - outstanding_payed

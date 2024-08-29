@@ -6,6 +6,7 @@ import streamlit as st
 from dateutil.relativedelta import relativedelta
 
 from loansim import (
+    CompositePayments,
     PastOverpayments,
     PaymentsInRange,
     kde,
@@ -47,15 +48,17 @@ simulations = {
         outstanding=MORTGAGE_AMOUNT,
         first_date=START_DATE,
         interest_rate=INTEREST_RATE,
-        payments=[
-            all_monthly_installments,
-            past_overpayments,
-            PaymentsInRange(  # Future overpayments
-                start_date=date.today(),
-                end_date=None,
-                amount=amount,
-            ),
-        ],
+        payments=CompositePayments(
+            [
+                all_monthly_installments,
+                past_overpayments,
+                PaymentsInRange(  # Future overpayments
+                    start_date=date.today(),
+                    end_date=None,
+                    amount=amount,
+                ),
+            ],
+        ),
     )
     for amount in overpayment_amounts_for_simulations
 }
@@ -77,7 +80,7 @@ with col1:
         outstanding_date=date.today(),
         interest_rate=INTEREST_RATE,
         mortgage_amount=MORTGAGE_AMOUNT,
-        payment_schemas=[monthly_installments_to_date, past_overpayments],
+        payments=CompositePayments([monthly_installments_to_date, past_overpayments]),
     )
     time_since_loan_start = relativedelta(date.today(), START_DATE)
     st.write(f"**Outstanding:**  {current_outstanding:,.2f} €")
