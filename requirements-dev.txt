@@ -1,0 +1,7 @@
+black[jupyter]
+flake8
+isort
+mypy
+pandas-stubs
+pytest
+types-python-dateutil
